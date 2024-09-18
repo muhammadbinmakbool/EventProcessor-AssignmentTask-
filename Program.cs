@@ -24,7 +24,12 @@ interface EventListener
     void OnEventReceived(Event evnt);
 }
 
-class FixedDelayStrategy
+abstract class RetryStrategy
+{
+    public abstract Task<bool> Execute(Func<bool> action, int maxAttempts);
+}
+
+class FixedDelayStrategy : RetryStrategy
 {
     private readonly int _delayMilliseconds;
 
@@ -33,7 +38,7 @@ class FixedDelayStrategy
         _delayMilliseconds = delayMilliseconds;
     }
 
-    public async Task<bool> Execute(Func<bool> action, int maxAttempts)
+    public override async Task<bool> Execute(Func<bool> action, int maxAttempts)
     {
         int attempts = 0;
         while (attempts < maxAttempts)
@@ -51,14 +56,47 @@ class FixedDelayStrategy
     }
 }
 
+class IncrementingDelayStrategy : RetryStrategy
+{
+    private readonly int _initialDelay;
+    private readonly int _maxDelay;
+
+    public IncrementingDelayStrategy(int initialDelay, int maxDelay)
+    {
+        _initialDelay = initialDelay;
+        _maxDelay = maxDelay;
+    }
+
+    public override async Task<bool> Execute(Func<bool> action, int maxAttempts)
+    {
+        int attempts = 0;
+        int delay = _initialDelay;
+
+        while (attempts < maxAttempts)
+        {
+            attempts++;
+            if (action())
+            {
+                return true;
+            }
+
+            Console.WriteLine($"Failed attempt {attempts}. Retrying in {delay}ms...");
+            await Task.Delay(delay);
+            delay = Math.Min(delay * 2, _maxDelay);
+        }
+
+        return false;
+    }
+}
+
 class EventProcessor
 {
     private ConcurrentQueue<Event> _eventQueue = new ConcurrentQueue<Event>();
     private Dictionary<string, Func<Event, bool>> _event_handlers = new Dictionary<string, Func<Event, bool>>();
     private bool _running = false;
-    private FixedDelayStrategy _retryStrategy;
+    private RetryStrategy _retryStrategy;
 
-    public EventProcessor(FixedDelayStrategy retryStrategy)
+    public EventProcessor(RetryStrategy retryStrategy)
     {
         _retryStrategy = retryStrategy;
     }
@@ -157,7 +195,9 @@ class Program
 {
     static void Main(string[] args)
     {
-        FixedDelayStrategy retryStrategy = new FixedDelayStrategy(1000);
+        // Choose either fixed delay or incrementing delay strategy
+        RetryStrategy retryStrategy = new FixedDelayStrategy(1000);
+        //RetryStrategy retryStrategy = new IncrementingDelayStrategy(100, 5000);
 
         EventProcessor processor = new EventProcessor(retryStrategy);
         AssignmentEventListener listener = new AssignmentEventListener(processor);
